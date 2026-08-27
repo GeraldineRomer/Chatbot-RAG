@@ -1,3 +1,4 @@
 .env
 vectorstore/
 documents/
+venv/
