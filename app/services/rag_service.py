@@ -20,12 +20,11 @@ def get_api_key():
     return GOOGLE_API_KEY or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 class GeminiEmbeddings(Embeddings):
-    """Embeddings optimizados procesando elementos individualmente usando el modelo actual."""
+    """Embeddings optimizados procesando elementos individualmente usando el modelo actual y limitando dimensiones."""
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("API Key de Google no configurada.")
         genai.configure(api_key=api_key)
-        # text-embedding-004 fue retirado; se utiliza gemini-embedding-001 como reemplazo
         self.model_name = "models/gemini-embedding-001"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
@@ -38,7 +37,8 @@ class GeminiEmbeddings(Embeddings):
                     res = genai.embed_content(
                         model=self.model_name,
                         content=text,
-                        task_type="retrieval_document"
+                        task_type="retrieval_document",
+                        output_dimensionality=768  # <-- Fuerza las 768 dimensiones que espera Pinecone
                     )
                     embeddings.append(res["embedding"])
                     exito = True
@@ -54,7 +54,8 @@ class GeminiEmbeddings(Embeddings):
         res = genai.embed_content(
             model=self.model_name,
             content=text,
-            task_type="retrieval_query"
+            task_type="retrieval_query",
+            output_dimensionality=768  # <-- Fuerza las 768 dimensiones en las búsquedas
         )
         return res["embedding"]
 
