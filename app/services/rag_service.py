@@ -6,12 +6,18 @@ import google.generativeai as genai
 from google.api_core.exceptions import ResourceExhausted
 from langchain_core.embeddings import Embeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_chroma import Chroma
-from app.config import VECTORSTORE_DIR, DOCUMENTS_DIR, GOOGLE_API_KEY
+from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
+from app.config import DOCUMENTS_DIR, GOOGLE_API_KEY
 
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
+# Nombre del índice en la nube de Pinecone
+INDEX_NAME = "chatbot-rag-index"
 
-VECTORSTORE_PATH = str(VECTORSTORE_DIR)
+def get_pinecone_api_key() -> str:
+    key = os.getenv("PINECONE_API_KEY")
+    if not key:
+        raise ValueError("PINECONE_API_KEY no está configurada en las variables de entorno.")
+    return key
 
 class GeminiEmbeddings(Embeddings):
     """Embeddings optimizados con lotes grandes y reintento automático ante límite 429."""
@@ -85,66 +91,67 @@ def get_embeddings():
 
 def get_llm():
     return ChatGoogleGenerativeAI(
-        model="gemini-3.6-flash",
+        model="gemini-1.5-flash",
         google_api_key=get_api_key(),
         temperature=0
     )
 
 def get_vectorstore():
-    return Chroma(
-        collection_name="pdf_rag",
-        embedding_function=get_embeddings(),
-        persist_directory=VECTORSTORE_PATH
+    """Obtiene la referencia al vectorstore alojado en Pinecone Cloud."""
+    return PineconeVectorStore(
+        index_name=INDEX_NAME,
+        embedding=get_embeddings(),
+        pinecone_api_key=get_pinecone_api_key()
     )
 
 def hay_documentos() -> bool:
+    """Verifica si existen vectores almacenados en el índice de Pinecone."""
     try:
-        vectorstore = get_vectorstore()
-        count = vectorstore._collection.count()
-        return count > 0
-    except Exception:
+        pc = Pinecone(api_key=get_pinecone_api_key())
+        indexes = [index.name for index in pc.list_indexes()]
+        if INDEX_NAME in indexes:
+            index = pc.Index(INDEX_NAME)
+            stats = index.describe_index_stats()
+            return stats.total_vector_count > 0
+        return False
+    except Exception as e:
+        print(f"Error verificando documentos en Pinecone: {e}")
         return False
 
 def guardar_chunks(chunks: list[str], filename: str = "documento.pdf"):
+    """Indexa y almacena los textos directamente en la nube de Pinecone."""
     if chunks:
         metadatas = [{"source": filename} for _ in chunks]
-        Chroma.from_texts(
+        PineconeVectorStore.from_texts(
             texts=chunks,
             embedding=get_embeddings(),
             metadatas=metadatas,
-            collection_name="pdf_rag",
-            persist_directory=VECTORSTORE_PATH
+            index_name=INDEX_NAME,
+            pinecone_api_key=get_pinecone_api_key()
         )
 
 def listar_documentos() -> list[str]:
+    """Obtiene la lista de nombres de PDFs subidos al sistema."""
     documentos = set()
-    # 1. Archivos en carpeta documents
     if os.path.exists(DOCUMENTS_DIR):
         for f in os.listdir(DOCUMENTS_DIR):
             if f.lower().endswith('.pdf') and not f.startswith('.'):
                 documentos.add(f)
-    
-    # 2. Metadatos de Chroma
-    try:
-        vectorstore = get_vectorstore()
-        data = vectorstore._collection.get()
-        metadatas = data.get("metadatas") or []
-        for meta in metadatas:
-            if meta and "source" in meta:
-                documentos.add(meta["source"])
-    except Exception:
-        pass
-
     return sorted(list(documentos))
 
 def reset_vectorstore():
+    """Elimina todos los vectores del índice en Pinecone y los archivos locales."""
     try:
-        vectorstore = get_vectorstore()
-        vectorstore.delete_collection()
+        pc = Pinecone(api_key=get_pinecone_api_key())
+        indexes = [index.name for index in pc.list_indexes()]
+        if INDEX_NAME in indexes:
+            index = pc.Index(INDEX_NAME)
+            index.delete(delete_all=True)
+            print("Vectores eliminados de Pinecone con éxito.")
     except Exception as e:
-        print(f"Aviso al resetear vectorstore: {e}")
+        print(f"Aviso al resetear vectorstore en Pinecone: {e}")
 
-    # Eliminar archivos en carpeta documents/
+    # Eliminar archivos locales en la carpeta documents/
     if os.path.exists(DOCUMENTS_DIR):
         for f in os.listdir(DOCUMENTS_DIR):
             path = os.path.join(DOCUMENTS_DIR, f)
@@ -158,9 +165,9 @@ def responder_pregunta(pregunta: str, chat_history: list = None) -> dict:
     if not hay_documentos():
         raise ValueError("No hay documentos cargados en el sistema. Por favor sube un archivo PDF primero.")
 
-    print("   [Debug] Obteniendo vectorstore...")
+    print("   [Debug] Obteniendo vectorstore de Pinecone...")
     vectorstore = get_vectorstore()
-    print("   [Debug] Ejecutando similarity_search...")
+    print("   [Debug] Ejecutando similarity_search en la nube...")
     docs = vectorstore.similarity_search(pregunta, k=4)
     print(f"   [Debug] Búsqueda finalizada. Documentos encontrados: {len(docs)}")
     
@@ -188,7 +195,7 @@ def responder_pregunta(pregunta: str, chat_history: list = None) -> dict:
     Pregunta: {pregunta}
     Respuesta:"""
 
-    print("   [Debug] Llamando al LLM (gemini-3.5-flash)...")
+    print("   [Debug] Llamando al LLM...")
     llm = get_llm()
     respuesta = llm.invoke(prompt)
     print("   [Debug] Respuesta del LLM recibida.")
