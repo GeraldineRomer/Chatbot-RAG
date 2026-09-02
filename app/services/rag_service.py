@@ -20,12 +20,12 @@ def get_pinecone_api_key() -> str:
     return key
 
 class GeminiEmbeddings(Embeddings):
-    """Embeddings optimizados usando text-embedding-004 (768 dimensiones nativas)."""
+    """Embeddings optimizados usando models/text-embedding-004 (768 dimensiones nativas)."""
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("GOOGLE_API_KEY / GEMINI_API_KEY no está configurada en el entorno.")
         genai.configure(api_key=api_key)
-        self.model_name = "text-embedding-004"  # Sin el prefijo "models/"
+        self.model_name = "models/text-embedding-004"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         all_embeddings = []
