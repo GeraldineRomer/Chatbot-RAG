@@ -1,16 +1,11 @@
 import os
 import time
-import shutil
 from dotenv import load_dotenv
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted
-from langchain_core.embeddings import Embeddings
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
 from app.config import DOCUMENTS_DIR, GOOGLE_API_KEY
 
-# Nombre del índice en la nube de Pinecone
 INDEX_NAME = "chatbot-rag-index"
 
 def get_pinecone_api_key() -> str:
@@ -19,64 +14,15 @@ def get_pinecone_api_key() -> str:
         raise ValueError("PINECONE_API_KEY no está configurada en las variables de entorno.")
     return key
 
-class GeminiEmbeddings(Embeddings):
-    """Embeddings optimizados usando models/text-embedding-004 (768 dimensiones nativas)."""
-    def __init__(self, api_key: str):
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY / GEMINI_API_KEY no está configurada en el entorno.")
-        genai.configure(api_key=api_key)
-        self.model_name = "models/text-embedding-004"
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        all_embeddings = []
-        batch_size = 30
-        
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            exito = False
-            intentos = 0
-            
-            while not exito and intentos < 3:
-                try:
-                    res = genai.embed_content(
-                        model=self.model_name,
-                        content=batch,
-                        task_type="retrieval_document"
-                    )
-                    all_embeddings.extend(res["embedding"])
-                    exito = True
-                    time.sleep(1)
-                except ResourceExhausted:
-                    intentos += 1
-                    print(f"⚠️ Límites de cuota alcanzado. Esperando 15 segundos para reintentar ({intentos}/3)...")
-                    time.sleep(15)
-                except Exception as e:
-                    raise e
-                    
-        return all_embeddings
-
-    def embed_query(self, text: str) -> list[float]:
-        try:
-            res = genai.embed_content(
-                model=self.model_name,
-                content=text,
-                task_type="retrieval_query"
-            )
-            return res["embedding"]
-        except ResourceExhausted:
-            time.sleep(10)
-            res = genai.embed_content(
-                model=self.model_name,
-                content=text,
-                task_type="retrieval_query"
-            )
-            return res["embedding"]
-
 def get_api_key():
     return GOOGLE_API_KEY or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 def get_embeddings():
-    return GeminiEmbeddings(api_key=get_api_key())
+    """Usa la integración oficial de LangChain para Gemini Embeddings (768 dimensiones)."""
+    return GoogleGenerativeAIEmbeddings(
+        model="models/text-embedding-004",
+        google_api_key=get_api_key()
+    )
 
 def get_llm():
     return ChatGoogleGenerativeAI(
@@ -86,7 +32,6 @@ def get_llm():
     )
 
 def get_vectorstore():
-    """Obtiene la referencia al vectorstore alojado en Pinecone Cloud."""
     return PineconeVectorStore(
         index_name=INDEX_NAME,
         embedding=get_embeddings(),
@@ -94,7 +39,6 @@ def get_vectorstore():
     )
 
 def hay_documentos() -> bool:
-    """Verifica si existen vectores almacenados en el índice de Pinecone."""
     try:
         pc = Pinecone(api_key=get_pinecone_api_key())
         indexes = [index.name for index in pc.list_indexes()]
@@ -108,7 +52,6 @@ def hay_documentos() -> bool:
         return False
 
 def guardar_chunks(chunks: list[str], filename: str = "documento.pdf"):
-    """Indexa y almacena los textos directamente en la nube de Pinecone."""
     if chunks:
         metadatas = [{"source": filename} for _ in chunks]
         PineconeVectorStore.from_texts(
@@ -120,7 +63,6 @@ def guardar_chunks(chunks: list[str], filename: str = "documento.pdf"):
         )
 
 def listar_documentos() -> list[str]:
-    """Obtiene la lista de nombres de PDFs subidos al sistema."""
     documentos = set()
     if os.path.exists(DOCUMENTS_DIR):
         for f in os.listdir(DOCUMENTS_DIR):
@@ -135,7 +77,6 @@ def reset_vectorstore():
         if INDEX_NAME in indexes:
             index = pc.Index(INDEX_NAME)
             stats = index.describe_index_stats()
-            # Solo invocar borrado si el índice no está vacío
             if stats.total_vector_count > 0:
                 index.delete(delete_all=True)
                 print("Vectores eliminados de Pinecone con éxito.")
