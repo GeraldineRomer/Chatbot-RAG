@@ -20,27 +20,16 @@ def get_pinecone_api_key() -> str:
     return key
 
 class GeminiEmbeddings(Embeddings):
-    """Embeddings optimizados con lotes grandes y reintento automático ante límite 429."""
+    """Embeddings optimizados usando text-embedding-004 fijado a 768 dimensiones."""
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("GOOGLE_API_KEY / GEMINI_API_KEY no está configurada en el entorno.")
         genai.configure(api_key=api_key)
-        self.model_name = self._resolver_modelo()
-
-    def _resolver_modelo(self) -> str:
-        try:
-            for m in genai.list_models():
-                if "embedContent" in m.supported_generation_methods:
-                    if "text-embedding-004" in m.name:
-                        return m.name
-                    return m.name
-        except Exception:
-            pass
-        return "models/text-embedding-004"
+        self.model_name = "models/text-embedding-004"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         all_embeddings = []
-        batch_size = 30  # Lotes más grandes = menos llamadas API
+        batch_size = 30
         
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
@@ -52,7 +41,8 @@ class GeminiEmbeddings(Embeddings):
                     res = genai.embed_content(
                         model=self.model_name,
                         content=batch,
-                        task_type="retrieval_document"
+                        task_type="retrieval_document",
+                        output_dimensionality=768
                     )
                     all_embeddings.extend(res["embedding"])
                     exito = True
@@ -71,7 +61,8 @@ class GeminiEmbeddings(Embeddings):
             res = genai.embed_content(
                 model=self.model_name,
                 content=text,
-                task_type="retrieval_query"
+                task_type="retrieval_query",
+                output_dimensionality=768
             )
             return res["embedding"]
         except ResourceExhausted:
@@ -79,7 +70,8 @@ class GeminiEmbeddings(Embeddings):
             res = genai.embed_content(
                 model=self.model_name,
                 content=text,
-                task_type="retrieval_query"
+                task_type="retrieval_query",
+                output_dimensionality=768
             )
             return res["embedding"]
 
