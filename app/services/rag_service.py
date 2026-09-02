@@ -20,7 +20,7 @@ def get_api_key():
 def get_embeddings():
     """Usa la integración oficial de LangChain para Gemini Embeddings (768 dimensiones)."""
     return GoogleGenerativeAIEmbeddings(
-        model="models/text-embedding-004",
+        model="text-embedding-004",
         google_api_key=get_api_key()
     )
 
