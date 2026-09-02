@@ -1,7 +1,9 @@
 import os
 import time
+import google.generativeai as genai
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_core.embeddings import Embeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
 from app.config import DOCUMENTS_DIR, GOOGLE_API_KEY
@@ -17,12 +19,46 @@ def get_pinecone_api_key() -> str:
 def get_api_key():
     return GOOGLE_API_KEY or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 
+class GeminiEmbeddings(Embeddings):
+    """Embeddings optimizados procesando elementos de forma individual para evitar batch 404/400 en gRPC."""
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("API Key de Google no configurada.")
+        genai.configure(api_key=api_key)
+        self.model_name = "models/text-embedding-004"
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        embeddings = []
+        for text in texts:
+            exito = False
+            intentos = 0
+            while not exito and intentos < 3:
+                try:
+                    res = genai.embed_content(
+                        model=self.model_name,
+                        content=text,  # Pasar string individual fuerza embed_content en lugar de batch
+                        task_type="retrieval_document"
+                    )
+                    embeddings.append(res["embedding"])
+                    exito = True
+                except Exception as e:
+                    intentos += 1
+                    if "429" in str(e) or "ResourceExhausted" in str(e):
+                        time.sleep(2 * intentos)
+                    else:
+                        raise e
+        return embeddings
+
+    def embed_query(self, text: str) -> list[float]:
+        res = genai.embed_content(
+            model=self.model_name,
+            content=text,
+            task_type="retrieval_query"
+        )
+        return res["embedding"]
+
 def get_embeddings():
-    """Usa la integración oficial de LangChain para Gemini Embeddings (768 dimensiones)."""
-    return GoogleGenerativeAIEmbeddings(
-        model="text-embedding-004",
-        google_api_key=get_api_key()
-    )
+    return GeminiEmbeddings(api_key=get_api_key())
 
 def get_llm():
     return ChatGoogleGenerativeAI(
@@ -96,11 +132,8 @@ def responder_pregunta(pregunta: str, chat_history: list = None) -> dict:
     if not hay_documentos():
         raise ValueError("No hay documentos cargados en el sistema. Por favor sube un archivo PDF primero.")
 
-    print("   [Debug] Obteniendo vectorstore de Pinecone...")
     vectorstore = get_vectorstore()
-    print("   [Debug] Ejecutando similarity_search en la nube...")
     docs = vectorstore.similarity_search(pregunta, k=4)
-    print(f"   [Debug] Búsqueda finalizada. Documentos encontrados: {len(docs)}")
     
     contexto = "\n\n".join([doc.page_content for doc in docs])
     fuentes = [doc.page_content for doc in docs]
@@ -126,10 +159,8 @@ def responder_pregunta(pregunta: str, chat_history: list = None) -> dict:
     Pregunta: {pregunta}
     Respuesta:"""
 
-    print("   [Debug] Llamando al LLM...")
     llm = get_llm()
     respuesta = llm.invoke(prompt)
-    print("   [Debug] Respuesta del LLM recibida.")
     
     return {
         "response": respuesta.content,
