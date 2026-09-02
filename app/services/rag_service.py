@@ -20,12 +20,13 @@ def get_api_key():
     return GOOGLE_API_KEY or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 class GeminiEmbeddings(Embeddings):
-    """Embeddings optimizados procesando elementos de forma individual para evitar batch 404/400 en gRPC."""
+    """Embeddings optimizados procesando elementos individualmente usando el modelo actual."""
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("API Key de Google no configurada.")
         genai.configure(api_key=api_key)
-        self.model_name = "models/text-embedding-004"
+        # text-embedding-004 fue retirado; se utiliza gemini-embedding-001 como reemplazo
+        self.model_name = "models/gemini-embedding-001"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         embeddings = []
@@ -36,7 +37,7 @@ class GeminiEmbeddings(Embeddings):
                 try:
                     res = genai.embed_content(
                         model=self.model_name,
-                        content=text,  # Pasar string individual fuerza embed_content en lugar de batch
+                        content=text,
                         task_type="retrieval_document"
                     )
                     embeddings.append(res["embedding"])
