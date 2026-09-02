@@ -140,18 +140,19 @@ def listar_documentos() -> list[str]:
     return sorted(list(documentos))
 
 def reset_vectorstore():
-    """Elimina todos los vectores del índice en Pinecone y los archivos locales."""
     try:
         pc = Pinecone(api_key=get_pinecone_api_key())
         indexes = [index.name for index in pc.list_indexes()]
         if INDEX_NAME in indexes:
             index = pc.Index(INDEX_NAME)
-            index.delete(delete_all=True)
-            print("Vectores eliminados de Pinecone con éxito.")
+            stats = index.describe_index_stats()
+            # Solo invocar borrado si el índice no está vacío
+            if stats.total_vector_count > 0:
+                index.delete(delete_all=True)
+                print("Vectores eliminados de Pinecone con éxito.")
     except Exception as e:
         print(f"Aviso al resetear vectorstore en Pinecone: {e}")
 
-    # Eliminar archivos locales en la carpeta documents/
     if os.path.exists(DOCUMENTS_DIR):
         for f in os.listdir(DOCUMENTS_DIR):
             path = os.path.join(DOCUMENTS_DIR, f)
