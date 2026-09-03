@@ -69,7 +69,7 @@ Todos los endpoints requieren el header **`X-Session-ID`** para operar sobre el 
 
 1. **Clonar el repositorio:**
    ```bash
-   git clone https://github.com/tu-usuario/chatbot-rag-backend.git
+   git clone https://github.com/GeraldineRomer/chatbot-rag-backend.git
    cd chatbot-rag-backend
    ```
 
@@ -96,3 +96,7 @@ Todos los endpoints requieren el header **`X-Session-ID`** para operar sobre el 
    ```bash
    uvicorn app.main:app --reload
    ```
+
+## Ver Swagger del proyecto
+Esto puede demorar entre 30 a 60 segundos en activar el servidor debido a que se usa en la capa gratuita de Render
+(https://chatbot-rag-8ws5.onrender.com/docs)
