@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -38,7 +39,7 @@ class GeminiEmbeddings(Embeddings):
                         model=self.model_name,
                         content=text,
                         task_type="retrieval_document",
-                        output_dimensionality=768  # <-- Fuerza las 768 dimensiones que espera Pinecone
+                        output_dimensionality=768
                     )
                     embeddings.append(res["embedding"])
                     exito = True
@@ -55,7 +56,7 @@ class GeminiEmbeddings(Embeddings):
             model=self.model_name,
             content=text,
             task_type="retrieval_query",
-            output_dimensionality=768  # <-- Fuerza las 768 dimensiones en las búsquedas
+            output_dimensionality=768
         )
         return res["embedding"]
 
@@ -69,72 +70,77 @@ def get_llm():
         temperature=0
     )
 
-def get_vectorstore():
+def get_vectorstore(session_id: str):
     return PineconeVectorStore(
         index_name=INDEX_NAME,
         embedding=get_embeddings(),
-        pinecone_api_key=get_pinecone_api_key()
+        pinecone_api_key=get_pinecone_api_key(),
+        namespace=session_id
     )
 
-def hay_documentos() -> bool:
+def hay_documentos(session_id: str) -> bool:
     try:
         pc = Pinecone(api_key=get_pinecone_api_key())
         indexes = [index.name for index in pc.list_indexes()]
         if INDEX_NAME in indexes:
             index = pc.Index(INDEX_NAME)
             stats = index.describe_index_stats()
-            return stats.total_vector_count > 0
+            ns = stats.namespaces
+            if hasattr(ns, '__getitem__'):
+                if session_id in ns:
+                    vector_count = ns[session_id].vector_count
+                    return vector_count > 0
+            return False
         return False
     except Exception as e:
         print(f"Error verificando documentos en Pinecone: {e}")
         return False
 
-def guardar_chunks(chunks: list[str], filename: str = "documento.pdf"):
+def guardar_chunks(chunks: list[str], filename: str = "documento.pdf", session_id: str = "default"):
     if chunks:
-        metadatas = [{"source": filename} for _ in chunks]
+        metadatas = [{"source": filename, "session_id": session_id} for _ in chunks]
         PineconeVectorStore.from_texts(
             texts=chunks,
             embedding=get_embeddings(),
             metadatas=metadatas,
             index_name=INDEX_NAME,
-            pinecone_api_key=get_pinecone_api_key()
+            pinecone_api_key=get_pinecone_api_key(),
+            namespace=session_id
         )
 
-def listar_documentos() -> list[str]:
+def listar_documentos(session_id: str) -> list[str]:
     documentos = set()
-    if os.path.exists(DOCUMENTS_DIR):
-        for f in os.listdir(DOCUMENTS_DIR):
+    session_dir = os.path.join(DOCUMENTS_DIR, session_id)
+    if os.path.exists(session_dir):
+        for f in os.listdir(session_dir):
             if f.lower().endswith('.pdf') and not f.startswith('.'):
                 documentos.add(f)
     return sorted(list(documentos))
 
-def reset_vectorstore():
+def reset_vectorstore(session_id: str):
     try:
         pc = Pinecone(api_key=get_pinecone_api_key())
         indexes = [index.name for index in pc.list_indexes()]
         if INDEX_NAME in indexes:
             index = pc.Index(INDEX_NAME)
-            stats = index.describe_index_stats()
-            if stats.total_vector_count > 0:
-                index.delete(delete_all=True)
-                print("Vectores eliminados de Pinecone con éxito.")
+            index.delete(delete_all=True, namespace=session_id)
+            print(f"Vectores del namespace '{session_id}' eliminados de Pinecone con éxito.")
     except Exception as e:
         print(f"Aviso al resetear vectorstore en Pinecone: {e}")
 
-    if os.path.exists(DOCUMENTS_DIR):
-        for f in os.listdir(DOCUMENTS_DIR):
-            path = os.path.join(DOCUMENTS_DIR, f)
-            if os.path.isfile(path) and not f.startswith('.'):
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    print(f"Error borrando {path}: {e}")
+    session_dir = os.path.join(DOCUMENTS_DIR, session_id)
+    if os.path.exists(session_dir):
+        try:
+            shutil.rmtree(session_dir)
+            print(f"Carpeta '{session_dir}' eliminada con éxito.")
+        except Exception as e:
+            print(f"Error borrando carpeta {session_dir}: {e}")
 
-def responder_pregunta(pregunta: str, chat_history: list = None) -> dict:
-    if not hay_documentos():
+def responder_pregunta(pregunta: str, chat_history: list = None, session_id: str = "default") -> dict:
+    if not hay_documentos(session_id):
         raise ValueError("No hay documentos cargados en el sistema. Por favor sube un archivo PDF primero.")
 
-    vectorstore = get_vectorstore()
+    vectorstore = get_vectorstore(session_id)
     docs = vectorstore.similarity_search(pregunta, k=4)
     
     contexto = "\n\n".join([doc.page_content for doc in docs])
